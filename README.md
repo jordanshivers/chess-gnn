@@ -1,8 +1,11 @@
 # chess-gnn
 
-A message-passing GNN that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which — after legal-move masking and temperature-scaled softmax — gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
+<!-- ![chess-gnn](imgs/img.png) -->
+<p align="center">
+  <img src="imgs/img.png" alt="chess-gnn diagram" width="500px"/>
+</p>
 
-**Status.** Research / personal project. End-to-end pipeline works (supervised pre-training on Lichess PGNs → AlphaZero-style or PPO self-play → Elo evaluation vs Stockfish) but the trained checkpoints are small and nowhere near engine-grade strength.
+A message-passing GNN that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which — after legal-move masking and temperature-scaled softmax — gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
 
 ## Quickstart
 
@@ -51,11 +54,13 @@ python -m pytest
 
 Extras:
 
+
 | Extra | Installs                            | Needed for                            |
 | ----- | ----------------------------------- | ------------------------------------- |
 | `viz` | matplotlib, gradio, jupyter, Pillow | notebooks, Gradio apps, GIF rendering |
 | `web` | flask                               | `app/web_play.py` drag-and-drop UI    |
 | `dev` | pytest, ruff                        | test suite / linting                  |
+
 
 PyTorch Geometric wheels must match your Torch version. For CPU/MPS on Apple Silicon the command above works as-is; for CUDA machines, see [https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
 
@@ -96,8 +101,8 @@ Requires an SL checkpoint to start from.
 
 Two objectives are available:
 
-- **`--algo az` (default)** — AlphaZero-style. Each self-play move runs PUCT MCTS and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
-- **`--algo ppo`** — PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
+- `**--algo az` (default)** — AlphaZero-style. Each self-play move runs PUCT MCTS and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
+- `**--algo ppo`** — PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
 
 ```bash
 # AlphaZero-style (default)
