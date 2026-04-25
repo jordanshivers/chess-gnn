@@ -7,6 +7,7 @@ Usage:
 Loss:
     main   = cross-entropy over legal moves (masked log-softmax on 4096 logits)
     aux    = cross-entropy on the 3-way under-promotion head, only on promoting moves
+    value  = MSE on the final game result from the side-to-move's perspective
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ def train(
     ckpt_every: int = 2000,
     device: str = "cpu",
     resume: Path | None = None,
+    value_coef: float = 0.25,
 ) -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     dev = torch.device(device)
@@ -75,18 +77,20 @@ def train(
 
     model.train()
     t0 = time.time()
-    running = {"loss": 0.0, "top1": 0.0, "top5": 0.0, "n": 0}
+    running = {"loss": 0.0, "value_loss": 0.0, "top1": 0.0, "top5": 0.0, "n": 0}
 
     step = start_step
     for batch in loader:
         if step >= steps:
             break
         batch = batch.to(dev)
-        policy, underpromo, _ = model(batch)
+        policy, underpromo, value = model(batch)
 
         mask = batch.legal_mask.view(-1, policy.size(-1))
         log_probs = masked_log_softmax(policy, mask)
         policy_loss = F.nll_loss(log_probs, batch.y)
+        value_target = batch.value_target.view_as(value).to(dtype=value.dtype)
+        value_loss = F.mse_loss(value, value_target)
 
         # Under-promo auxiliary loss over the batch's promoting moves only.
         up_target = batch.underpromo_target
@@ -99,7 +103,7 @@ def train(
         else:
             up_loss = torch.zeros((), device=dev)
 
-        loss = policy_loss + 0.1 * up_loss
+        loss = policy_loss + 0.1 * up_loss + value_coef * value_loss
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -108,6 +112,7 @@ def train(
 
         with torch.no_grad():
             running["loss"] += loss.item() * batch.y.size(0)
+            running["value_loss"] += value_loss.item() * batch.y.size(0)
             running["top1"] += topk_accuracy(log_probs, batch.y, 1) * batch.y.size(0)
             running["top5"] += topk_accuracy(log_probs, batch.y, 5) * batch.y.size(0)
             running["n"] += batch.y.size(0)
@@ -118,10 +123,11 @@ def train(
             dt = time.time() - t0
             print(
                 f"step {step:>7d} | loss {running['loss']/n:.4f} "
+                f"| v {running['value_loss']/n:.4f} "
                 f"| top1 {running['top1']/n:.3f} | top5 {running['top5']/n:.3f} "
                 f"| {n / dt:.1f} pos/s"
             )
-            running = {"loss": 0.0, "top1": 0.0, "top5": 0.0, "n": 0}
+            running = {"loss": 0.0, "value_loss": 0.0, "top1": 0.0, "top5": 0.0, "n": 0}
             t0 = time.time()
 
         if step % ckpt_every == 0:
@@ -163,6 +169,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ckpt-every", type=int, default=2000)
     p.add_argument("--device", default="cpu")
     p.add_argument("--resume", type=Path, default=None)
+    p.add_argument("--value-coef", type=float, default=0.25)
     return p.parse_args()
 
 
@@ -183,4 +190,5 @@ if __name__ == "__main__":
         ckpt_every=args.ckpt_every,
         device=args.device,
         resume=args.resume,
+        value_coef=args.value_coef,
     )

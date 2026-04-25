@@ -87,11 +87,12 @@ python -m chess_gnn.train_sl \
     --ckpt checkpoints/sl \
     --steps 100000 \
     --batch-size 256 \
+    --value-coef 0.25 \
     --min-elo 2200 \
     --device cpu                  # or: mps, cuda
 ```
 
-Checkpoints are written to `checkpoints/sl/sl_step{N}.pt` and `sl_final.pt`. Top-1 / top-5 move-match accuracy on the streamed batch is logged every `--log-every` steps.
+Checkpoints are written to `checkpoints/sl/sl_step{N}.pt` and `sl_final.pt`. Top-1 / top-5 move-match accuracy and value loss on the streamed batch are logged every `--log-every` steps. The supervised dataset also trains the value head from each game's final result, signed from the side-to-move's perspective; this is important because MCTS uses the value head to evaluate leaves.
 
 **Or use the notebook** (runs locally or on Colab): [notebooks/train_sl.ipynb](notebooks/train_sl.ipynb).
 
@@ -101,7 +102,7 @@ Requires an SL checkpoint to start from.
 
 Two objectives are available:
 
-- `**--algo az` (default)** - AlphaZero-style. Each self-play move runs PUCT MCTS and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
+- `**--algo az` (default)** - AlphaZero-style. Each self-play move runs PUCT MCTS with root Dirichlet noise for exploration, and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
 - `**--algo ppo`** - PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
 
 ```bash
@@ -140,7 +141,7 @@ python -m chess_gnn.eval_elo \
     --sf-move-time 0.1
 ```
 
-Evaluate at near-argmax temperature (default `--temperature 0.05`) - higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation; at a fixed checkpoint this is worth a few hundred Elo over raw-policy play.
+Evaluate at near-argmax temperature (default `--temperature 0.05`) - higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation. MCTS is much slower than raw-policy play because it runs many leaf evaluations per move, and it is only expected to help once the checkpoint has a trained value head.
 
 **Or use the notebook:** [notebooks/eval_elo.ipynb](notebooks/eval_elo.ipynb) - installs Stockfish on Colab automatically, plots observed vs fitted score curves.
 
@@ -180,6 +181,7 @@ state = torch.load("checkpoints/sl/sl_final.pt", map_location="cpu")
 model.load_state_dict(state["model"])
 agent = GNNAgent(model, device="cpu", default_temperature=0.3, num_simulations=200)
 # num_simulations=0 disables MCTS and plays from the raw policy.
+# MCTS quality depends on the checkpoint's trained value head.
 
 board = chess.Board()
 ranking = agent.rank_moves(board)
@@ -197,7 +199,7 @@ svg = render_prediction_svg(board, ranking, topk=6)
 - **Heads:**
   - **Policy:** MLP on `[h_i, h_j, edge_ij]` → one logit per directed edge, flattened to `[4096]`. Illegal moves masked to -inf before softmax.
   - **Under-promotion:** 3-way logits (N/B/R) per edge; consulted only when the sampled edge is a promoting-pawn move. Default promotion is queen.
-  - **Value:** mean-pooled graph embedding → tanh scalar in [-1, 1], used as RL baseline.
+  - **Value:** mean-pooled graph embedding → tanh scalar in [-1, 1], trained from side-to-move game outcomes and used by MCTS leaf evaluation / RL baselines.
 
 ## Testing
 
@@ -205,7 +207,7 @@ svg = render_prediction_svg(board, ranking, topk=6)
 python -m pytest
 ```
 
-Covers: encoding shapes and piece placement, legal-mask correctness over random positions, move-index round-trips (including under-promotions), model forward shapes / no-NaN, masked softmax legality, streaming PGN dataset, MCTS legality invariants, and self-play trajectory invariants.
+Covers: encoding shapes and piece placement, legal-mask correctness over random positions, move-index round-trips (including under-promotions), model forward shapes / no-NaN, masked softmax legality, streaming PGN dataset including value targets, MCTS legality and root-noise invariants, and self-play trajectory invariants.
 
 ## Acknowledgments
 

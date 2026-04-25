@@ -151,7 +151,11 @@ def play_self_game_mcts(
         if board.is_game_over(claim_draw=True):
             break
 
-        moves, probs = mcts.visit_distribution(board, num_simulations=num_simulations)
+        moves, probs = mcts.visit_distribution(
+            board,
+            num_simulations=num_simulations,
+            add_dirichlet=True,
+        )
         if not moves:
             break
 

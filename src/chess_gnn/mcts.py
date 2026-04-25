@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional
 
 import chess
 import torch
@@ -106,12 +105,21 @@ class MCTS:
 
     @torch.no_grad()
     def visit_distribution(
-        self, board: chess.Board, num_simulations: int
+        self,
+        board: chess.Board,
+        num_simulations: int,
+        add_dirichlet: bool | None = None,
     ) -> tuple[list[chess.Move], list[float]]:
         """Expose the root visit counts as a distribution — useful for SL
-        distillation or inspection (tests, viz)."""
+        distillation or inspection (tests, viz).
+
+        `add_dirichlet` controls root exploration noise. By default it follows
+        this searcher's configuration; callers doing deterministic evaluation
+        should pass False explicitly.
+        """
         root = _Node(to_play=board.turn)
-        self._expand(root, board, add_dirichlet=False)
+        use_noise = (self.dirichlet_eps > 0.0) if add_dirichlet is None else add_dirichlet
+        self._expand(root, board, add_dirichlet=use_noise)
         for _ in range(num_simulations):
             self._simulate(root, board.copy(stack=False))
         items = [(a, n) for a, n in root.visits.items() if n > 0]

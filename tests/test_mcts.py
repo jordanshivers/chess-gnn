@@ -31,6 +31,34 @@ def test_visit_distribution_sums_to_one(tiny_model: ChessGNN) -> None:
     assert abs(sum(probs) - 1.0) < 1e-6
 
 
+def test_visit_distribution_controls_root_noise(tiny_model: ChessGNN, monkeypatch) -> None:
+    seen: list[bool] = []
+    original = MCTS._expand
+
+    def spy(self, node, board, add_dirichlet):
+        seen.append(add_dirichlet)
+        return original(self, node, board, add_dirichlet)
+
+    monkeypatch.setattr(MCTS, "_expand", spy)
+    board = chess.Board()
+
+    MCTS(tiny_model, device="cpu").visit_distribution(board, num_simulations=0)
+    MCTS(
+        tiny_model,
+        device="cpu",
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+    ).visit_distribution(board, num_simulations=0)
+    MCTS(
+        tiny_model,
+        device="cpu",
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+    ).visit_distribution(board, num_simulations=0, add_dirichlet=False)
+
+    assert seen == [False, True, False]
+
+
 def test_agent_mcts_disabled_by_default(tiny_model: ChessGNN) -> None:
     agent = GNNAgent(tiny_model, device="cpu", default_temperature=0.0)
     # Monkey-patch the MCTS.search to make sure it isn't called in the default mode.

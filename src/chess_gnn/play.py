@@ -77,7 +77,7 @@ class GNNAgent:
         """
         sims = self._resolve_sims(num_simulations)
         if sims > 0 and not board.is_game_over(claim_draw=True):
-            moves, probs = self._mcts.visit_distribution(board, sims)
+            moves, probs = self._mcts.visit_distribution(board, sims, add_dirichlet=False)
             return MoveRanking(moves=moves, probabilities=probs)
 
         temperature = temperature if temperature is not None else self.default_temperature
