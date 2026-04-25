@@ -1,0 +1,6 @@
+writeup/
+data/
+docs/
+checkpoints/
+.venv/
+.DS_Store
