@@ -28,7 +28,7 @@ from torch_geometric.data import Batch
 
 from .model import ChessGNN, masked_log_softmax
 from .play import GNNAgent, play_game
-from .selfplay import SelfPlayTrajectory, play_self_game, play_self_game_mcts
+from .selfplay import SelfPlayTrajectory, play_self_game, play_self_games_mcts_batched
 
 
 def _flatten_trajectories(
@@ -140,17 +140,15 @@ def train(
 
         # --- Phase 1: self-play ----------------------------------------------
         if algo == "az":
-            trajs = [
-                play_self_game_mcts(
-                    model,
-                    device=dev,
-                    num_simulations=mcts_sims,
-                    temperature=temperature,
-                    temperature_drop_ply=az_temperature_drop_ply,
-                    max_plies=max_plies,
-                )
-                for _ in range(games_per_iter)
-            ]
+            trajs = play_self_games_mcts_batched(
+                model,
+                num_games=games_per_iter,
+                device=dev,
+                num_simulations=mcts_sims,
+                temperature=temperature,
+                temperature_drop_ply=az_temperature_drop_ply,
+                max_plies=max_plies,
+            )
         elif algo == "ppo":
             trajs = [
                 play_self_game(model, device=dev, temperature=temperature, max_plies=max_plies)

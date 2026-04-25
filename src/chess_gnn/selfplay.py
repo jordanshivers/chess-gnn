@@ -53,6 +53,15 @@ class SelfPlayTrajectory:
     result: str = "*"
 
 
+@dataclass
+class _MCTSSelfPlayState:
+    board: chess.Board
+    traj: SelfPlayTrajectory
+    mcts: MCTS
+    ply: int = 0
+    done: bool = False
+
+
 def _result_to_scalar(result: str) -> float:
     """Map PGN result string to a scalar from white's perspective."""
     return {"1-0": 1.0, "0-1": -1.0, "1/2-1/2": 0.0}.get(result, 0.0)
@@ -135,54 +144,121 @@ def play_self_game_mcts(
     `temperature_drop_ply` so strong moves are played in the midgame/endgame.
     Dirichlet noise is added at the root during sim to encourage exploration.
     """
-    dev = torch.device(device)
-    model.eval()
-    mcts = MCTS(
+    return play_self_games_mcts_batched(
         model,
-        device=dev,
+        num_games=1,
+        device=device,
+        num_simulations=num_simulations,
+        temperature=temperature,
+        temperature_drop_ply=temperature_drop_ply,
+        max_plies=max_plies,
         c_puct=c_puct,
         dirichlet_alpha=dirichlet_alpha,
         dirichlet_eps=dirichlet_eps,
-    )
-    board = chess.Board()
-    traj = SelfPlayTrajectory()
+    )[0]
 
-    for ply in range(max_plies):
-        if board.is_game_over(claim_draw=True):
-            break
 
-        moves, probs = mcts.visit_distribution(
-            board,
-            num_simulations=num_simulations,
-            add_dirichlet=True,
+@torch.no_grad()
+def play_self_games_mcts_batched(
+    model: ChessGNN,
+    num_games: int,
+    device: torch.device | str = "cpu",
+    num_simulations: int = 64,
+    temperature: float = 1.0,
+    temperature_drop_ply: int = 30,
+    max_plies: int = 300,
+    c_puct: float = 1.5,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_eps: float = 0.25,
+) -> list[SelfPlayTrajectory]:
+    """Run AlphaZero-style self-play games together, batching MCTS leaf evals.
+
+    Each active game owns its own tree. During a simulation round we select one
+    pending leaf per active game, evaluate all such leaves in a single model
+    call, and back up into the corresponding trees.
+    """
+    if num_games <= 0:
+        return []
+
+    dev = torch.device(device)
+    model.eval()
+    states = [
+        _MCTSSelfPlayState(
+            board=chess.Board(),
+            traj=SelfPlayTrajectory(),
+            mcts=MCTS(
+                model,
+                device=dev,
+                c_puct=c_puct,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,
+            ),
         )
-        if not moves:
+        for _ in range(num_games)
+    ]
+
+    for state in states:
+        state.mcts.prepare_root(state.board, add_dirichlet=False)
+
+    while True:
+        active = [
+            s for s in states
+            if not s.done
+            and s.ply < max_plies
+            and not s.board.is_game_over(claim_draw=True)
+        ]
+        if not active:
             break
 
-        # Dense policy target over the 4096 (from,to) index space.
-        target = torch.zeros(NUM_MOVES, dtype=torch.float32)
-        for mv, p in zip(moves, probs):
-            target[mv.from_square * 64 + mv.to_square] += float(p)
+        for state in active:
+            state.mcts.prepare_root(state.board, add_dirichlet=False)
+            state.mcts.add_root_dirichlet_noise()
 
-        t = temperature if ply < temperature_drop_ply else 0.0
-        if t <= 1e-3:
-            mv = moves[int(max(range(len(probs)), key=lambda i: probs[i]))]
-        else:
-            w = torch.tensor(probs, dtype=torch.float32).pow(1.0 / t)
-            w = w / w.sum().clamp_min(1e-12)
-            mv = moves[int(torch.multinomial(w, 1).item())]
-        action = mv.from_square * 64 + mv.to_square
+        for _ in range(num_simulations):
+            pending = []
+            for state in active:
+                leaf = state.mcts.run_simulation_round(state.board)
+                if leaf is not None:
+                    pending.append(leaf)
+            if pending:
+                active[0].mcts.evaluate_pending_batch(pending)
 
-        traj.positions.append(board_to_data(board))
-        traj.actions.append(action)
-        traj.masks.append(legal_mask(board))
-        traj.side_signs.append(1 if board.turn == chess.WHITE else -1)
-        traj.rewards.append(0.0)
-        traj.policy_targets.append(target)
-        board.push(mv)
+        for state in active:
+            moves, probs = state.mcts.root_visit_distribution(state.board)
+            if not moves:
+                state.done = True
+                continue
 
-    traj.result = board.result(claim_draw=True)
-    outcome = _result_to_scalar(traj.result)
-    for i in range(len(traj.rewards)):
-        traj.rewards[i] = outcome * traj.side_signs[i]
-    return traj
+            target = torch.zeros(NUM_MOVES, dtype=torch.float32)
+            for mv, p in zip(moves, probs):
+                target[mv.from_square * 64 + mv.to_square] += float(p)
+
+            t = temperature if state.ply < temperature_drop_ply else 0.0
+            if t <= 1e-3:
+                mv = moves[int(max(range(len(probs)), key=lambda i: probs[i]))]
+            else:
+                w = torch.tensor(probs, dtype=torch.float32).pow(1.0 / t)
+                w = w / w.sum().clamp_min(1e-12)
+                mv = moves[int(torch.multinomial(w, 1).item())]
+            action = mv.from_square * 64 + mv.to_square
+
+            state.traj.positions.append(board_to_data(state.board))
+            state.traj.actions.append(action)
+            state.traj.masks.append(legal_mask(state.board))
+            state.traj.side_signs.append(1 if state.board.turn == chess.WHITE else -1)
+            state.traj.rewards.append(0.0)
+            state.traj.policy_targets.append(target)
+            state.board.push(mv)
+            state.ply += 1
+
+            if state.board.is_game_over(claim_draw=True) or state.ply >= max_plies:
+                state.done = True
+            else:
+                state.mcts.advance_root(mv, state.board)
+
+    for state in states:
+        state.traj.result = state.board.result(claim_draw=True)
+        outcome = _result_to_scalar(state.traj.result)
+        for i in range(len(state.traj.rewards)):
+            state.traj.rewards[i] = outcome * state.traj.side_signs[i]
+    return [state.traj for state in states]

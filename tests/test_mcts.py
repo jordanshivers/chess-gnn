@@ -59,6 +59,49 @@ def test_visit_distribution_controls_root_noise(tiny_model: ChessGNN, monkeypatc
     assert seen == [False, True, False]
 
 
+def test_batched_pending_eval_updates_visit_counts(tiny_model: ChessGNN) -> None:
+    board_a = chess.Board()
+    board_b = chess.Board()
+    board_b.push_san("d4")
+
+    mcts_a = MCTS(tiny_model, device="cpu")
+    mcts_b = MCTS(tiny_model, device="cpu")
+    pending = [
+        p for p in (
+            mcts_a.run_simulation_round(board_a),
+            mcts_b.run_simulation_round(board_b),
+        )
+        if p is not None
+    ]
+
+    mcts_a.evaluate_pending_batch(pending)
+    moves_a, probs_a = mcts_a.root_visit_distribution(board_a)
+    moves_b, probs_b = mcts_b.root_visit_distribution(board_b)
+
+    assert moves_a and abs(sum(probs_a) - 1.0) < 1e-6
+    assert moves_b and abs(sum(probs_b) - 1.0) < 1e-6
+    assert all(m in board_a.legal_moves for m in moves_a)
+    assert all(m in board_b.legal_moves for m in moves_b)
+
+
+def test_advance_root_reuses_selected_child(tiny_model: ChessGNN) -> None:
+    mcts = MCTS(tiny_model, device="cpu")
+    board = chess.Board()
+    pending = mcts.run_simulation_round(board)
+    if pending is not None:
+        mcts.evaluate_pending_batch([pending])
+
+    move = mcts.select_root_move(board, temperature=0.0)
+    action = move.from_square * 64 + move.to_square
+    assert mcts.root is not None
+    child = mcts.root.children[action]
+    board.push(move)
+    mcts.advance_root(move, board)
+
+    assert mcts.root is child
+    assert mcts.root_key == board.fen()
+
+
 def test_agent_mcts_disabled_by_default(tiny_model: ChessGNN) -> None:
     agent = GNNAgent(tiny_model, device="cpu", default_temperature=0.0)
     # Monkey-patch the MCTS.search to make sure it isn't called in the default mode.
