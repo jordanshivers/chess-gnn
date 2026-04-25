@@ -5,7 +5,7 @@
   <img src="imgs/img.png" alt="chess-gnn diagram" width="500px"/>
 </p>
 
-A message-passing graph neural network that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which — after legal-move masking and temperature-scaled softmax — gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
+A message-passing graph neural network that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which (after legal-move masking and temperature-scaled softmax) gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
 
 ## Quickstart
 
@@ -70,7 +70,7 @@ The recommended path is **supervised pre-training on Lichess → RL self-play fi
 
 ### 1. Supervised pre-training
 
-**Data.** Download a PGN dump from [Lichess database](https://database.lichess.org/) (monthly standard dumps, or the Elite subset for stronger play) into `data/`. The dataset class reads `.pgn` and `.pgn.zst` directly — no decompression needed.
+**Data.** Download a PGN dump from [Lichess database](https://database.lichess.org/) (monthly standard dumps, or the Elite subset for stronger play) into `data/`. The dataset class reads `.pgn` and `.pgn.zst` directly - no decompression needed.
 
 ```bash
 mkdir -p data
@@ -101,8 +101,8 @@ Requires an SL checkpoint to start from.
 
 Two objectives are available:
 
-- `**--algo az` (default)** — AlphaZero-style. Each self-play move runs PUCT MCTS and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
-- `**--algo ppo`** — PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
+- `**--algo az` (default)** - AlphaZero-style. Each self-play move runs PUCT MCTS and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
+- `**--algo ppo`** - PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
 
 ```bash
 # AlphaZero-style (default)
@@ -123,7 +123,7 @@ python -m chess_gnn.train_rl \
     --temperature 0.7
 ```
 
-Every `--eval-every` iterations, plays evaluation games against a frozen copy of the starting SL model and reports W/D/L — a regression guardrail.
+Every `--eval-every` iterations, plays evaluation games against a frozen copy of the starting SL model and reports W/D/L - a regression guardrail.
 
 **Or use the notebook:** [notebooks/train_rl.ipynb](notebooks/train_rl.ipynb).
 
@@ -140,9 +140,9 @@ python -m chess_gnn.eval_elo \
     --sf-move-time 0.1
 ```
 
-Evaluate at near-argmax temperature (default `--temperature 0.05`) — higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation; at a fixed checkpoint this is worth a few hundred Elo over raw-policy play.
+Evaluate at near-argmax temperature (default `--temperature 0.05`) - higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation; at a fixed checkpoint this is worth a few hundred Elo over raw-policy play.
 
-**Or use the notebook:** [notebooks/eval_elo.ipynb](notebooks/eval_elo.ipynb) — installs Stockfish on Colab automatically, plots observed vs fitted score curves.
+**Or use the notebook:** [notebooks/eval_elo.ipynb](notebooks/eval_elo.ipynb) - installs Stockfish on Colab automatically, plots observed vs fitted score curves.
 
 ### 4. Play and inspect
 
@@ -154,19 +154,19 @@ python -m app.web_play --ckpt checkpoints/sl/sl_final.pt
 python -m app.web_play --ckpt checkpoints/rl/rl_final.pt --mcts-sims 200
 ```
 
-**Gradio inspection UI** — FEN editor, temperature slider, top-k move arrows, play-top / sample / undo / reset:
+**Gradio inspection UI** - FEN editor, temperature slider, top-k move arrows, play-top / sample / undo / reset:
 
 ```bash
 python -m app.gradio_app --ckpt checkpoints/sl/sl_final.pt
 ```
 
-**Gradio play UI** — dropdown / UCI-SAN input to play a full game:
+**Gradio play UI** - dropdown / UCI-SAN input to play a full game:
 
 ```bash
 python -m app.gradio_play --ckpt checkpoints/rl/rl_final.pt
 ```
 
-**Programmatic** — in a notebook or script:
+**Programmatic** - in a notebook or script:
 
 ```python
 import chess
@@ -192,7 +192,7 @@ svg = render_prediction_svg(board, ranking, topk=6)
 ## Architecture at a glance
 
 - **Node features (45):** 13-dim piece one-hot, square color, rank/file one-hots, and global state (side to move, castling, en passant, halfmove clock) broadcast onto every node.
-- **Edges (4032):** fully-connected directed. Edge features encode geometric priors — file/rank delta, same-rank/file/diagonal indicators, knight offset, chebyshev distance — so the GNN doesn't have to rediscover chess geometry.
+- **Edges (4032):** fully-connected directed. Edge features encode geometric priors - file/rank delta, same-rank/file/diagonal indicators, knight offset, chebyshev distance - so the GNN doesn't have to rediscover chess geometry.
 - **Trunk:** stacked `TransformerConv` layers with residual + LayerNorm. Edge features are fed in via PyG's `edge_dim`.
 - **Heads:**
   - **Policy:** MLP on `[h_i, h_j, edge_ij]` → one logit per directed edge, flattened to `[4096]`. Illegal moves masked to -inf before softmax.
@@ -218,4 +218,4 @@ Covers: encoding shapes and piece placement, legal-mask correctness over random 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
