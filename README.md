@@ -5,7 +5,7 @@
   <img src="imgs/img.png" alt="chess-gnn diagram" width="500px"/>
 </p>
 
-A message-passing GNN that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which — after legal-move masking and temperature-scaled softmax — gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
+A message-passing graph neural network that plays chess. A board is encoded as a fully-connected 64-node graph (nodes = squares, features = piece type + position + global state); the network outputs one logit per directed (from, to) edge, which — after legal-move masking and temperature-scaled softmax — gives a distribution over legal moves. Optional PUCT MCTS wraps the policy/value heads at inference and during self-play RL.
 
 ## Quickstart
 
