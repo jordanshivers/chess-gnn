@@ -46,6 +46,7 @@ class _PendingEval:
     node: _Node
     board: chess.Board
     path: list[tuple[_Node, int]]
+    virtual_loss: float = 1.0
 
 
 class MCTS:
@@ -69,6 +70,7 @@ class MCTS:
         self.c_puct = c_puct
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = dirichlet_eps
+        self.virtual_loss = 1.0
         self.root: _Node | None = None
         self.root_key: str | None = None
 
@@ -80,6 +82,7 @@ class MCTS:
         board: chess.Board,
         num_simulations: int,
         temperature: float = 0.0,
+        batch_size: int = 1,
     ) -> chess.Move:
         """Run `num_simulations` and return a move chosen from the visit counts.
 
@@ -91,7 +94,7 @@ class MCTS:
             raise ValueError(f"No legal moves in {board.fen()}")
 
         root = self._new_root(board, add_dirichlet=(self.dirichlet_eps > 0.0))
-        self._run_simulations(root, board, num_simulations)
+        self._run_simulations(root, board, num_simulations, batch_size=batch_size)
 
         # Pick a move from visit counts.
         items = [(a, n) for a, n in root.visits.items() if n > 0]
@@ -117,6 +120,7 @@ class MCTS:
         board: chess.Board,
         num_simulations: int,
         add_dirichlet: bool | None = None,
+        batch_size: int = 1,
     ) -> tuple[list[chess.Move], list[float]]:
         """Expose the root visit counts as a distribution — useful for SL
         distillation or inspection (tests, viz).
@@ -127,7 +131,7 @@ class MCTS:
         """
         use_noise = (self.dirichlet_eps > 0.0) if add_dirichlet is None else add_dirichlet
         root = self._new_root(board, add_dirichlet=use_noise)
-        self._run_simulations(root, board, num_simulations)
+        self._run_simulations(root, board, num_simulations, batch_size=batch_size)
         return self._visit_distribution_from_root(root, board)
 
     @torch.no_grad()
@@ -161,6 +165,24 @@ class MCTS:
         assert self.root is not None
         return self._select_pending(self.root, board.copy(stack=False))
 
+    def collect_simulation_batch(
+        self,
+        board: chess.Board,
+        num_simulations: int,
+        batch_size: int,
+    ) -> list[_PendingEval]:
+        """Collect up to `batch_size` pending leaves from this tree.
+
+        Virtual loss is applied as leaves are selected, so repeated descents can
+        fan out within one tree before a batched network evaluation.
+        """
+        pending: list[_PendingEval] = []
+        for _ in range(min(num_simulations, batch_size)):
+            leaf = self.run_simulation_round(board)
+            if leaf is not None:
+                pending.append(leaf)
+        return pending
+
     def root_visit_distribution(self, board: chess.Board) -> tuple[list[chess.Move], list[float]]:
         """Return the reusable root's visit distribution for `board`."""
         self.prepare_root(board, add_dirichlet=False)
@@ -188,6 +210,7 @@ class MCTS:
             priors = {a: float(probs[i, a].item()) for a in legal_idx}
             total = sum(priors.values()) or 1.0
             p.node.prior = {a: prob / total for a, prob in priors.items()}
+            self._revert_virtual_loss(p.path, p.virtual_loss)
             self._backup(p.path, float(values[i]), p.node.to_play)
 
     def select_root_move(self, board: chess.Board, temperature: float = 0.0) -> chess.Move:
@@ -215,11 +238,25 @@ class MCTS:
         self._expand(root, board, add_dirichlet=add_dirichlet)
         return root
 
-    def _run_simulations(self, root: _Node, board: chess.Board, num_simulations: int) -> None:
-        for _ in range(num_simulations):
-            pending = self._select_pending(root, board.copy(stack=False))
-            if pending is not None:
-                self.evaluate_pending_batch([pending])
+    def _run_simulations(
+        self,
+        root: _Node,
+        board: chess.Board,
+        num_simulations: int,
+        batch_size: int = 1,
+    ) -> None:
+        sims_done = 0
+        batch_size = max(1, int(batch_size))
+        while sims_done < num_simulations:
+            chunk = min(batch_size, num_simulations - sims_done)
+            pending = []
+            for _ in range(chunk):
+                leaf = self._select_pending(root, board.copy(stack=False))
+                if leaf is not None:
+                    pending.append(leaf)
+            sims_done += chunk
+            if pending:
+                self.evaluate_pending_batch(pending)
 
     def _visit_distribution_from_root(
         self, root: _Node, board: chess.Board
@@ -240,6 +277,8 @@ class MCTS:
                 self._backup(path, node.terminal_value, node.to_play)
                 return None
             a = self._select_action(node)
+            if a is None:
+                return None
             path.append((node, a))
             if a not in node.children:
                 board.push(_action_to_move(board, a))
@@ -251,15 +290,26 @@ class MCTS:
                     child.terminal_value = value
                     self._backup(path, value, child.to_play)
                     return None
-                return _PendingEval(node=child, board=board.copy(stack=False), path=path)
+                self._apply_virtual_loss(path, self.virtual_loss)
+                return _PendingEval(
+                    node=child,
+                    board=board.copy(stack=False),
+                    path=path,
+                    virtual_loss=self.virtual_loss,
+                )
             board.push(_action_to_move(board, a))
             node = node.children[a]
 
-    def _select_action(self, node: _Node) -> int:
+    def _select_action(self, node: _Node) -> int | None:
         """PUCT: argmax Q + c_puct * P * sqrt(N_total) / (1 + N(a))."""
         sqrt_total = math.sqrt(max(node.total_visits, 1))
-        best_a, best_score = -1, -float("inf")
+        best_a, best_score = None, -float("inf")
         for a, p in node.prior.items():
+            child = node.children.get(a)
+            if child is not None and not child.is_terminal and not child.prior:
+                # Child has been selected for batched evaluation but not
+                # expanded yet; virtual loss already reserves this path.
+                continue
             n = node.visits.get(a, 0)
             q = (node.value_sum.get(a, 0.0) / n) if n > 0 else 0.0
             u = self.c_puct * p * sqrt_total / (1 + n)
@@ -267,6 +317,22 @@ class MCTS:
             if score > best_score:
                 best_score, best_a = score, a
         return best_a
+
+    def _apply_virtual_loss(self, path: list[tuple[_Node, int]], virtual_loss: float) -> None:
+        for node, a in reversed(path):
+            node.visits[a] = node.visits.get(a, 0) + 1
+            node.value_sum[a] = node.value_sum.get(a, 0.0) - virtual_loss
+            node.total_visits += 1
+
+    def _revert_virtual_loss(self, path: list[tuple[_Node, int]], virtual_loss: float) -> None:
+        for node, a in reversed(path):
+            node.visits[a] = node.visits.get(a, 0) - 1
+            if node.visits[a] <= 0:
+                del node.visits[a]
+            node.value_sum[a] = node.value_sum.get(a, 0.0) + virtual_loss
+            if abs(node.value_sum[a]) < 1e-12:
+                del node.value_sum[a]
+            node.total_visits -= 1
 
     def _backup(self, path: list[tuple[_Node, int]], leaf_value: float, leaf_to_play: bool) -> None:
         """Propagate `leaf_value` (from leaf_to_play's POV) up the path,

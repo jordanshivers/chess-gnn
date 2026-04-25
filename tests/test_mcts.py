@@ -84,6 +84,21 @@ def test_batched_pending_eval_updates_visit_counts(tiny_model: ChessGNN) -> None
     assert all(m in board_b.legal_moves for m in moves_b)
 
 
+def test_intra_tree_batch_collects_multiple_pending_leaves(tiny_model: ChessGNN) -> None:
+    mcts = MCTS(tiny_model, device="cpu")
+    board = chess.Board()
+
+    pending = mcts.collect_simulation_batch(board, num_simulations=4, batch_size=4)
+    assert len(pending) > 1
+
+    mcts.evaluate_pending_batch(pending)
+    moves, probs = mcts.root_visit_distribution(board)
+
+    assert mcts.root is not None
+    assert moves and abs(sum(probs) - 1.0) < 1e-6
+    assert sum(mcts.root.visits.values()) == len(pending)
+
+
 def test_advance_root_reuses_selected_child(tiny_model: ChessGNN) -> None:
     mcts = MCTS(tiny_model, device="cpu")
     board = chess.Board()

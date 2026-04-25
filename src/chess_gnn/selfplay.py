@@ -129,6 +129,7 @@ def play_self_game_mcts(
     model: ChessGNN,
     device: torch.device | str = "cpu",
     num_simulations: int = 64,
+    mcts_batch_size: int = 1,
     temperature: float = 1.0,
     temperature_drop_ply: int = 30,
     max_plies: int = 300,
@@ -149,6 +150,7 @@ def play_self_game_mcts(
         num_games=1,
         device=device,
         num_simulations=num_simulations,
+        mcts_batch_size=mcts_batch_size,
         temperature=temperature,
         temperature_drop_ply=temperature_drop_ply,
         max_plies=max_plies,
@@ -164,6 +166,7 @@ def play_self_games_mcts_batched(
     num_games: int,
     device: torch.device | str = "cpu",
     num_simulations: int = 64,
+    mcts_batch_size: int = 1,
     temperature: float = 1.0,
     temperature_drop_ply: int = 30,
     max_plies: int = 300,
@@ -174,11 +177,12 @@ def play_self_games_mcts_batched(
     """Run AlphaZero-style self-play games together, batching MCTS leaf evals.
 
     Each active game owns its own tree. During a simulation round we select one
-    pending leaf per active game, evaluate all such leaves in a single model
-    call, and back up into the corresponding trees.
+    or more pending leaves per active game, evaluate all such leaves in a
+    single model call, and back up into the corresponding trees.
     """
     if num_games <= 0:
         return []
+    mcts_batch_size = max(1, int(mcts_batch_size))
 
     dev = torch.device(device)
     model.eval()
@@ -214,14 +218,21 @@ def play_self_games_mcts_batched(
             state.mcts.prepare_root(state.board, add_dirichlet=False)
             state.mcts.add_root_dirichlet_noise()
 
-        for _ in range(num_simulations):
+        sims_done = 0
+        while sims_done < num_simulations:
+            chunk = min(mcts_batch_size, num_simulations - sims_done)
             pending = []
             for state in active:
-                leaf = state.mcts.run_simulation_round(state.board)
-                if leaf is not None:
-                    pending.append(leaf)
+                pending.extend(
+                    state.mcts.collect_simulation_batch(
+                        state.board,
+                        num_simulations=chunk,
+                        batch_size=chunk,
+                    )
+                )
             if pending:
                 active[0].mcts.evaluate_pending_batch(pending)
+            sims_done += chunk
 
         for state in active:
             moves, probs = state.mcts.root_visit_distribution(state.board)

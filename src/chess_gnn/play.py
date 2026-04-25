@@ -30,8 +30,8 @@ class GNNAgent:
         temperature-scaled policy head. Fast; the baseline for all eval so far.
       * **MCTS** (`num_simulations > 0`): PUCT search using the policy head as
         priors and the value head at leaves. Roughly one forward pass per
-        simulation, so cost scales linearly with `num_simulations`. Expect a
-        substantial strength jump at even 50-200 sims.
+        batch of simulations; `mcts_batch_size` trades a bit of search
+        synchrony for much better accelerator utilization.
 
     `num_simulations` can also be passed per-call to `rank_moves` / `select_move`
     to override the default.
@@ -43,6 +43,7 @@ class GNNAgent:
         device: str | torch.device = "cpu",
         default_temperature: float = 1.0,
         num_simulations: int = 0,
+        mcts_batch_size: int = 1,
         c_puct: float = 1.5,
         dirichlet_alpha: float = 0.0,
         dirichlet_eps: float = 0.0,
@@ -51,6 +52,7 @@ class GNNAgent:
         self.device = torch.device(device)
         self.default_temperature = default_temperature
         self.num_simulations = int(num_simulations)
+        self.mcts_batch_size = max(1, int(mcts_batch_size))
         self._mcts = MCTS(
             self.model,
             device=self.device,
@@ -77,7 +79,12 @@ class GNNAgent:
         """
         sims = self._resolve_sims(num_simulations)
         if sims > 0 and not board.is_game_over(claim_draw=True):
-            moves, probs = self._mcts.visit_distribution(board, sims, add_dirichlet=False)
+            moves, probs = self._mcts.visit_distribution(
+                board,
+                sims,
+                add_dirichlet=False,
+                batch_size=self.mcts_batch_size,
+            )
             return MoveRanking(moves=moves, probabilities=probs)
 
         temperature = temperature if temperature is not None else self.default_temperature
@@ -133,7 +140,12 @@ class GNNAgent:
         if sims > 0 and not board.is_game_over(claim_draw=True):
             # Let MCTS do its own visit-count temperature sampling; the raw
             # policy's temperature doesn't apply here.
-            return self._mcts.search(board, num_simulations=sims, temperature=t)
+            return self._mcts.search(
+                board,
+                num_simulations=sims,
+                temperature=t,
+                batch_size=self.mcts_batch_size,
+            )
 
         ranking = self.rank_moves(board, temperature=temperature, num_simulations=0)
         if not ranking.moves:

@@ -108,6 +108,7 @@ def train(
     device: str = "cpu",
     algo: str = "az",           # "az" = AlphaZero-style distillation, "ppo" = PPO
     mcts_sims: int = 64,        # sims per move during self-play (az only)
+    mcts_batch_size: int = 8,    # pending leaves per game per MCTS batch (az only)
     az_temperature_drop_ply: int = 30,
     max_plies: int = 300,
     ppo_clip: float = 0.2,      # PPO clip range ε
@@ -145,6 +146,7 @@ def train(
                 num_games=games_per_iter,
                 device=dev,
                 num_simulations=mcts_sims,
+                mcts_batch_size=mcts_batch_size,
                 temperature=temperature,
                 temperature_drop_ply=az_temperature_drop_ply,
                 max_plies=max_plies,
@@ -304,6 +306,12 @@ def _parse_args() -> argparse.Namespace:
                    help="'az' uses MCTS + visit-distribution distillation (default); "
                         "'ppo' is PPO with a clipped ratio and value-head baseline.")
     p.add_argument("--mcts-sims", type=int, default=64, help="MCTS sims per move in self-play (az only).")
+    p.add_argument(
+        "--mcts-batch-size",
+        type=int,
+        default=8,
+        help="Pending leaves per game to collect before batched MCTS eval (az only).",
+    )
     p.add_argument("--az-temp-drop-ply", type=int, default=30)
     p.add_argument("--max-plies", type=int, default=300)
     p.add_argument("--ppo-clip", type=float, default=0.2)
@@ -334,6 +342,7 @@ if __name__ == "__main__":
         device=args.device,
         algo=args.algo,
         mcts_sims=args.mcts_sims,
+        mcts_batch_size=args.mcts_batch_size,
         az_temperature_drop_ply=args.az_temp_drop_ply,
         max_plies=args.max_plies,
         ppo_clip=args.ppo_clip,
