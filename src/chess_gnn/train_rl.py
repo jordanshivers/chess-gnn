@@ -12,7 +12,9 @@
   efficiently and is far more stable under a noisy terminal-only reward.
 
 Periodically plays evaluation games against a frozen baseline (the SL starting
-point) and prints win/draw/loss counts as a regression guardrail.
+point) and prints win/draw/loss counts as a regression guardrail. For
+`algo="az"`, that eval uses the same MCTS sim count and batch size as
+self-play so the check matches the trained playing mode.
 """
 
 from __future__ import annotations
@@ -72,10 +74,29 @@ def evaluate(
     device: str,
     num_games: int = 10,
     temperature: float = 0.2,
+    mcts_sims: int = 0,
+    mcts_batch_size: int = 1,
 ) -> dict:
-    """Play `num_games` games vs the frozen baseline, alternating colors."""
-    agent = GNNAgent(model, device=device, default_temperature=temperature)
-    base_agent = GNNAgent(baseline, device=device, default_temperature=temperature)
+    """Play `num_games` games vs the frozen baseline, alternating colors.
+
+    If ``mcts_sims > 0``, both players use PUCT MCTS. If ``0``, both use the
+    raw policy head only (faster, but misaligned with AZ self-play).
+    """
+    mcts_batch_size = max(1, int(mcts_batch_size))
+    agent = GNNAgent(
+        model,
+        device=device,
+        default_temperature=temperature,
+        num_simulations=mcts_sims,
+        mcts_batch_size=mcts_batch_size,
+    )
+    base_agent = GNNAgent(
+        baseline,
+        device=device,
+        default_temperature=temperature,
+        num_simulations=mcts_sims,
+        mcts_batch_size=mcts_batch_size,
+    )
     wins = draws = losses = 0
     for i in range(num_games):
         white, black = (agent, base_agent) if i % 2 == 0 else (base_agent, agent)
@@ -261,7 +282,15 @@ def train(
             )
 
         if it % eval_every == 0 or it == iterations:
-            stats = evaluate(model, baseline, device=device, num_games=eval_games)
+            eval_sims, eval_mcts_bsz = (mcts_sims, mcts_batch_size) if algo == "az" else (0, 1)
+            stats = evaluate(
+                model,
+                baseline,
+                device=device,
+                num_games=eval_games,
+                mcts_sims=eval_sims,
+                mcts_batch_size=eval_mcts_bsz,
+            )
             print(f"  eval vs baseline: {stats}")
             torch.save(
                 {
