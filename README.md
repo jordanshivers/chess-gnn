@@ -70,8 +70,6 @@ PyTorch Geometric wheels must match your Torch version. For CPU/MPS on Apple Sil
 
 ## Workflow
 
-The recommended path is **supervised pre-training on Lichess → RL self-play fine-tune**. Self-play from scratch in chess is extremely slow; bootstrapping from SL gives the RL phase a meaningful gradient signal.
-
 ### 1. Supervised pre-training
 
 **Data.** Download a PGN dump from [Lichess database](https://database.lichess.org/) (monthly standard dumps, or the Elite subset for stronger play) into `data/`. The dataset class reads `.pgn` and `.pgn.zst` directly - no decompression needed.
