@@ -102,8 +102,8 @@ Requires an SL checkpoint to start from.
 
 Two objectives are available:
 
-- `**--algo az` (default)** - AlphaZero-style. Each self-play move runs PUCT MCTS with root Dirichlet noise for exploration, and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
-- `**--algo ppo`** - PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
+- **`--algo az` (default)** - AlphaZero-style. Each self-play move runs PUCT MCTS with root Dirichlet noise for exploration, and the visit distribution is used as a dense per-move policy target (cross-entropy). Works even when self-play games draw.
+- **`--algo ppo`** - PPO with a clipped-ratio surrogate and the value head as baseline. Reuses each rollout across multiple epochs. No MCTS during self-play, so it's much faster per game but relies on decisive outcomes.
 
 ```bash
 # AlphaZero-style (default)
@@ -141,7 +141,7 @@ python -m chess_gnn.eval_elo \
     --sf-move-time 0.1
 ```
 
-Evaluate at near-argmax temperature (default `--temperature 0.05`) - higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation. MCTS is much slower than raw-policy play because it runs many leaf evaluations per move, and it is only expected to help once the checkpoint has a trained value head.
+Evaluate at near-argmax temperature (default `--temperature 0.05`) - higher values add noise and underestimate the rating. Add `--mcts-sims 200` to wrap the policy in PUCT MCTS during evaluation. MCTS is much slower than raw-policy play because it runs many search simulations per move, and it is only expected to help once the checkpoint has a trained value head.
 
 **Or use the notebook:** [notebooks/eval_elo.ipynb](notebooks/eval_elo.ipynb) - installs Stockfish on Colab automatically, plots observed vs fitted score curves.
 
@@ -171,14 +171,11 @@ python -m app.gradio_play --ckpt checkpoints/rl/rl_final.pt
 
 ```python
 import chess
-from chess_gnn.model import ChessGNN
+from chess_gnn.model import load_model
 from chess_gnn.play import GNNAgent
 from chess_gnn.viz import render_prediction_svg
-import torch
 
-model = ChessGNN()  # hidden_dim/num_layers must match training config
-state = torch.load("checkpoints/sl/sl_final.pt", map_location="cpu")
-model.load_state_dict(state["model"])
+model = load_model("checkpoints/sl/sl_final.pt", device="cpu")
 agent = GNNAgent(model, device="cpu", default_temperature=0.3, num_simulations=200)
 # num_simulations=0 disables MCTS and plays from the raw policy.
 # MCTS quality depends on the checkpoint's trained value head.
@@ -207,7 +204,7 @@ svg = render_prediction_svg(board, ranking, topk=6)
 python -m pytest
 ```
 
-Covers: encoding shapes and piece placement, legal-mask correctness over random positions, move-index round-trips (including under-promotions), model forward shapes / no-NaN, masked softmax legality, streaming PGN dataset including value targets, MCTS legality and root-noise invariants, and self-play trajectory invariants.
+Covers: encoding shapes and piece placement, legal-mask correctness over random positions, move-index round-trips (including under-promotions), model forward shapes / no-NaN, masked softmax legality, streaming PGN dataset including value targets, MCTS legality, root-noise, batching/tree-reuse invariants, and self-play trajectory invariants.
 
 ## Acknowledgments
 

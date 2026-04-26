@@ -16,7 +16,7 @@ from typing import IO
 import chess
 import chess.pgn
 import torch
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from torch_geometric.data import Data
 
 from .encoding import board_to_data
@@ -143,4 +143,44 @@ class PGNMoveDataset(IterableDataset):
         data.legal_mask = legal_mask(board)
         side_value = white_value if board.turn == chess.WHITE else -white_value
         data.value_target = torch.tensor(side_value, dtype=torch.float32)
+        return data
+
+
+def _torch_load(path: Path):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+class EngineValueDataset(Dataset):
+    """Finite dataset of Stockfish-labeled PGN positions.
+
+    The file is produced by `python -m chess_gnn.make_value_dataset` and stores
+    primitive records containing FEN, played move, and a side-to-move engine
+    value in [-1, 1].
+    """
+
+    def __init__(self, path: Path | str, value_blend: float = 1.0) -> None:
+        self.path = Path(path)
+        payload = _torch_load(self.path)
+        self.records = payload["records"] if isinstance(payload, dict) else payload
+        if not self.records:
+            raise ValueError(f"No value records found in {self.path}")
+        self.value_blend = float(value_blend)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Data:
+        record = self.records[idx]
+        board = chess.Board(record["fen"])
+        move = chess.Move.from_uci(record["move_uci"])
+        data = PGNMoveDataset._encode(board, move, float(record.get("game_value", 0.0)))
+        engine_value = float(record["engine_value"])
+        game_value = float(record.get("game_value", 0.0))
+        value = self.value_blend * engine_value + (1.0 - self.value_blend) * game_value
+        data.value_target = torch.tensor(value, dtype=torch.float32)
+        data.engine_value_target = torch.tensor(engine_value, dtype=torch.float32)
+        data.game_value_target = torch.tensor(game_value, dtype=torch.float32)
         return data
